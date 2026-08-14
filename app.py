@@ -31,42 +31,46 @@ def cargar_datos_locales():
 
 df_partidos = cargar_datos_locales()
 
-# 3. DICCIONARIO INTELIGENTE DE EQUIPOS REALES
+# 3. MAPEO DEFINITIVO DESDE TEAMS.CSV
 @st.cache_data
-def cargar_mapeo_equipos(df):
-    # Diccionario base con los principales IDs del dataset de ESPN (puedes ampliarlo)
-    mapa_nombres = {
-        1: "Real Madrid", 2: "Barcelona", 3: "Manchester United", 4: "Liverpool",
-        5: "Bayern Munich", 6: "Juventus", 7: "AC Milan", 8: "PSG",
-        9: "Manchester City", 10: "Arsenal", 11: "Chelsea", 12: "Atletico Madrid",
-        13: "Borussia Dortmund", 14: "Inter Milan", 15: "Boca Juniors", 16: "River Plate",
-        17: "Rosario Central", 18: "Corinthians", 19: "Flamengo", 20: "Palmeiras",
-        21: "Sao Paulo", 22: "Santos", 23: "Gremio", 24: "Cruzeiro"
-    }
+def cargar_diccionario_equipos_oficial(df_partidos):
+    archivo_teams = 'teams.csv'
     
-    # Extraer de forma segura todos los IDs de equipos disponibles en tu CSV limpio
-    ids_unicos = sorted(list(set(df['homeTeamId'].unique()) | set(df['awayTeamId'].unique())))
-    
-    # Rellenar los IDs faltantes automáticamente para que la app no tire errores
-    dicc_final = {}
-    for id_eq in ids_unicos:
-        if id_eq in mapa_nombres:
-            dicc_final[id_eq] = mapa_nombres[id_eq]
-        else:
-            dicc_final[id_eq] = f"Club Deportivo (ID: {id_eq})"
+    if os.path.exists(archivo_teams):
+        try:
+            df_teams = pd.read_csv(archivo_teams)
+            # Detectar automáticamente las columnas de ID y de Nombre
+            col_id = [c for c in df_teams.columns if 'id' in c.lower() or 'uid' in c.lower()][0]
+            col_name = [c for c in df_teams.columns if 'name' in c.lower() or 'display' in c.lower()][0]
             
-    return dicc_final
+            # Crear diccionario { ID: "Nombre Real" }
+            return dict(zip(df_teams[col_id].astype(int), df_teams[col_name].astype(str)))
+        except Exception as e:
+            st.warning(f"Aviso técnico al procesar teams.csv: {e}")
+            
+    # Si no existe, usa IDs por defecto
+    ids_unicos = set(df_partidos['homeTeamId'].unique()) | set(df_partidos['awayTeamId'].unique())
+    return {int(id_eq): f"Club Deportivo (ID: {id_eq})" for id_eq in ids_unicos}
 
 if not df_partidos.empty:
-    diccionario_nombres = cargar_mapeo_equipos(df_partidos)
+    diccionario_nombres = cargar_diccionario_equipos_oficial(df_partidos)
 else:
     diccionario_nombres = {}
 
-# 4. INTERFAZ INTERACTIVA CON EQUIPOS REALES
+# 4. INTERFAZ INTERACTIVA CONTROLADA
 if modelo is not None and not df_partidos.empty:
     
-    # Crear la lista con formato visual: "Nombre del Equipo (ID: X)"
-    opciones_menu = sorted([f"{nombre} [ID: {id_eq}]" for id_eq, nombre in diccionario_nombres.items()])
+    # Obtener todos los IDs reales que tienen partidos registrados
+    ids_con_partidos = set(df_partidos['homeTeamId'].unique()) | set(df_partidos['awayTeamId'].unique())
+    
+    # Construir la lista de opciones usando los nombres reales del archivo teams.csv
+    opciones_menu = []
+    for id_eq in ids_con_partidos:
+        id_int = int(id_eq)
+        nombre_verdadero = diccionario_nombres.get(id_int, f"Club Deportivo (ID: {id_int})")
+        opciones_menu.append(f"{nombre_verdadero} [ID: {id_int}]")
+        
+    opciones_menu = sorted(opciones_menu)
     
     col1, col2 = st.columns(2)
     with col1:
@@ -105,15 +109,14 @@ if modelo is not None and not df_partidos.empty:
     # 5. Botón de predicción
     if st.button("🔮 Predecir Resultado con IA Real", use_container_width=True):
         datos_entrada = pd.DataFrame([[racha_home_calculada, racha_away_calculada]], columns=['home_racha_5', 'away_racha_5'])
-        probabilidades = modelo.predict_proba(datos_entrada)[0]
+        probabilidades = modelo.predict_proba(datos_entrada)
         
-        prob_no_gana_local = probabilidades[0] # Empate o Visitante
-        prob_gana_local = probabilidades[1]    # Gana Local
+        prob_gana_local = probabilidades[0][1]
         
         st.subheader("📊 Diagnóstico del Modelo")
         if prob_gana_local > 0.55:
             st.success(f"🏆 Pronóstico: Victoria recomendada para el **{nombre_home}**")
-        elif prob_no_gana_local > 0.55:
+        elif prob_gana_local < 0.45:
             st.warning(f"🛡️ Pronóstico: Doble oportunidad recomendada para **Empate o Victoria de {nombre_away}**")
         else:
             st.info("⚖️ Partido sumamente equilibrado, estadísticas muy parejas.")
