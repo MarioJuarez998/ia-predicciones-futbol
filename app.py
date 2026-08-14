@@ -4,6 +4,7 @@ import joblib
 import os
 import zipfile
 import urllib.request
+import base64
 
 st.set_page_config(page_title="IA Predictora Avanzada", page_icon="⚽", layout="centered")
 st.title("⚽ IA Predictora de Fútbol Inteligente")
@@ -20,7 +21,7 @@ def cargar_modelo_seguro():
 
 modelo = cargar_modelo_seguro()
 
-# 2. DESCARGA DIRECTA Y ULTRALIGERA (Sin usar la librería pesada de Kaggle)
+# 2. DESCARGA DIRECTA CORREGIDA CON HEADERS DE AUTENTICACIÓN
 @st.cache_data(show_spinner="🔄 Descargando y actualizando estadísticas desde Kaggle de forma directa...")
 def descargar_datos_directo():
     if "KAGGLE_USERNAME" in st.secrets and "KAGGLE_KEY" in st.secrets:
@@ -34,25 +35,24 @@ def descargar_datos_directo():
     ruta_extraccion = "base_data"
     os.makedirs(ruta_extraccion, exist_ok=True)
     
-    # URL de descarga directa usando la API REST básica de Kaggle
-    url = f"https://kaggle.com"
+    url = "https://kaggle.com"
     
     try:
-        # Configurar la autenticación básica para la descarga de Kaggle
-        password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-        password_mgr.add_password(None, url, usuario, llave)
-        handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
-        opener = urllib.request.build_opener(handler)
-        urllib.request.install_opener(opener)
+        # Crear la cabecera de autenticación básica requerida por la API de Kaggle
+        credenciales = f"{usuario}:{llave}".encode("utf-8")
+        auth_base64 = base64.b64encode(credenciales).decode("utf-8")
         
-        # Descargar el archivo ZIP completo
-        urllib.request.urlretrieve(url, ruta_zip)
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Basic {auth_base64}")
         
-        # Descomprimir los archivos manualmente en lugar de usar herramientas externas
+        # Realizar la descarga del archivo binario comprimido de forma correcta
+        with urllib.request.urlopen(req) as respuesta, open(ruta_zip, "wb") as archivo_salida:
+            archivo_salida.write(respuesta.read())
+        
+        # Descomprimir los archivos CSV
         with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
             zip_ref.extractall(ruta_extraccion)
             
-        # Borrar el ZIP para liberar memoria en el servidor
         if os.path.exists(ruta_zip):
             os.remove(ruta_zip)
             
@@ -60,7 +60,7 @@ def descargar_datos_directo():
         st.error(f"Error al descargar directamente de Kaggle: {e}")
         return pd.DataFrame()
     
-    # Buscar todos los archivos CSV extraídos, ignorando subcarpetas conflictivas
+    # Buscar todos los archivos CSV extraídos
     todos_los_archivos = []
     for raiz, dirs, archivos in os.walk(ruta_extraccion):
         for archivo in archivos:
@@ -68,11 +68,10 @@ def descargar_datos_directo():
                 todos_los_archivos.append(os.path.join(raiz, archivo))
                 
     if not todos_los_archivos:
-        st.warning("No se encontraron tablas estructuradas de partidos.")
+        st.warning("No se encontraron tablas estructuradas de partidos en la carpeta.")
         return pd.DataFrame()
         
     try:
-        # Procesar los datos con el motor estándar de Python para evitar fallos de segmentación
         lista_df = [pd.read_csv(f, low_memory=False, engine='python') for f in todos_los_archivos]
         df = pd.concat(lista_df, ignore_index=True)
         df = df.dropna(subset=['date', 'homeTeamId', 'awayTeamId', 'homeTeamWinner'])
